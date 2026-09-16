@@ -1,0 +1,81 @@
+{
+  "name": "@arsenallab/arsenal-light",
+  "version": "0.12.0",
+  "description": "TypeScript toolkit that orchestrates AI coding agents inside isolated sandbox environments",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "arsenal": "./bin/arsenal.mjs"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./sandboxes/no-sandbox": {
+      "import": "./dist/sandboxes/no-sandbox.js",
+      "types": "./dist/sandboxes/no-sandbox.d.ts"
+    },
+    "./agents/bob": {
+      "import": "./dist/agents/bob.js",
+      "types": "./dist/agents/bob.d.ts"
+    },
+    "./agents/bobAcp": {
+      "import": "./dist/agents/bobAcp.js",
+      "types": "./dist/agents/bobAcp.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "prepare": "npm run build",
+    "pretest": "npm run check:arch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsgo --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check:arch": "node scripts/check-architecture.mjs",
+    "check:types": "node scripts/check-public-types-effect-free.mjs"
+  },
+  "keywords": [
+    "cli",
+    "sandbox",
+    "docker",
+    "ai",
+    "agent"
+  ],
+  "packageManager": "npm@10.9.2",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ArsenalLab/arsenal-light.git"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@changesets/cli": "^2.30.0",
+    "@effect/platform": "^0.95.0",
+    "@types/node": "^25.5.0",
+    "@typescript/native-preview": "^7.0.0-dev.20260317.1",
+    "effect": "^3.20.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.1",
+    "prettier": "^3.5.3",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.0",
+    "zod": "^4.4.3"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0",
+    "@clack/prompts": "^1.1.0",
+    "dotenv": "^17.4.2"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ]
+}

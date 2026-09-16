@@ -1,0 +1,11 @@
+node_modules
+dist
+*.tgz
+.env.*
+.vercel
+.arsenal
+workflows
+.bob
+.claude
+.env
+.DS_Store
