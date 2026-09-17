@@ -118,15 +118,19 @@ function runInstall(pm) {
   execSync(bareInstallCommand(pm), { cwd, stdio: "inherit" });
 }
 
-function ensureGitignoreLine() {
+function ensureGitignoreLines(lines) {
   const gitignorePath = join(cwd, ".gitignore");
-  const line = ".arsenal/logs/";
   const existing = existsSync(gitignorePath)
     ? readFileSync(gitignorePath, "utf8")
     : "";
-  if (existing.split("\n").some((l) => l.trim() === line)) return;
+  const existingLines = new Set(existing.split("\n").map((l) => l.trim()));
+  const toAdd = lines.filter((line) => !existingLines.has(line));
+  if (toAdd.length === 0) return;
   const needsNewlineBefore = existing.length > 0 && !existing.endsWith("\n");
-  appendFileSync(gitignorePath, `${needsNewlineBefore ? "\n" : ""}${line}\n`);
+  appendFileSync(
+    gitignorePath,
+    `${needsNewlineBefore ? "\n" : ""}${toAdd.join("\n")}\n`,
+  );
 }
 
 function runInit(force, skipInstall) {
@@ -148,11 +152,14 @@ function runInit(force, skipInstall) {
 
   writeFileSync(join(arsenalDir, "prompt.md"), PROMPT_TEMPLATE);
   writeFileSync(join(arsenalDir, runFile), RUN_TEMPLATE);
-  ensureGitignoreLine();
 
   const pkgCreated = ensurePackageJson();
   const dep = addDevDependency();
   const pm = detectPackageManager();
+
+  ensureGitignoreLines(
+    pkgCreated.created ? [".arsenal/logs/", "node_modules/"] : [".arsenal/logs/"],
+  );
 
   console.log(`Created .arsenal/prompt.md and .arsenal/${runFile}`);
   if (pkgCreated.created) {
