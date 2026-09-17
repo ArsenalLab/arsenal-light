@@ -74,25 +74,18 @@ function gitDependencySpec() {
   return `github:${owner}/${repo}`;
 }
 
-function installCommand(pm, spec) {
-  switch (pm) {
-    case "pnpm":
-      return `pnpm add -D ${spec}`;
-    case "yarn":
-      return `yarn add -D ${spec}`;
-    case "bun":
-      return `bun add -d ${spec}`;
-    default:
-      return `npm install --save-dev ${spec}`;
-  }
+function ensurePackageJson() {
+  const pkgPath = join(cwd, "package.json");
+  if (existsSync(pkgPath)) return { created: false };
+
+  const name = cwd.split(/[\\/]/).pop()?.toLowerCase().replace(/[^a-z0-9_.-]/g, "-") || "arsenal-project";
+  const pkg = { name, version: "0.0.0", private: true };
+  writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+  return { created: true };
 }
 
 function addDevDependency() {
   const pkgPath = join(cwd, "package.json");
-  if (!existsSync(pkgPath)) {
-    return { changed: false, reason: "no package.json in this directory" };
-  }
-
   const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
   const alreadyPresent =
     pkg.dependencies?.["@arsenallab/arsenal-light"] ??
@@ -107,6 +100,24 @@ function addDevDependency() {
   return { changed: true };
 }
 
+function bareInstallCommand(pm) {
+  switch (pm) {
+    case "pnpm":
+      return "pnpm install";
+    case "yarn":
+      return "yarn install";
+    case "bun":
+      return "bun install";
+    default:
+      return "npm install";
+  }
+}
+
+function runInstall(pm) {
+  console.log(`\nRunning ${bareInstallCommand(pm)}...`);
+  execSync(bareInstallCommand(pm), { cwd, stdio: "inherit" });
+}
+
 function ensureGitignoreLine() {
   const gitignorePath = join(cwd, ".gitignore");
   const line = ".arsenal/logs/";
@@ -118,7 +129,7 @@ function ensureGitignoreLine() {
   appendFileSync(gitignorePath, `${needsNewlineBefore ? "\n" : ""}${line}\n`);
 }
 
-function runInit(force) {
+function runInit(force, skipInstall) {
   if (!isGitRepo()) {
     console.error("arsenal init must be run inside a git repository.");
     process.exit(1);
@@ -139,34 +150,53 @@ function runInit(force) {
   writeFileSync(join(arsenalDir, runFile), RUN_TEMPLATE);
   ensureGitignoreLine();
 
+  const pkgCreated = ensurePackageJson();
   const dep = addDevDependency();
   const pm = detectPackageManager();
 
   console.log(`Created .arsenal/prompt.md and .arsenal/${runFile}`);
+  if (pkgCreated.created) {
+    console.log("Created package.json (none existed in this directory)");
+  }
   if (dep.changed) {
     console.log(
       "Added @arsenallab/arsenal-light to devDependencies in package.json",
     );
   }
 
+  let installFailed = false;
+  if (skipInstall) {
+    console.log(
+      `\nSkipped install (--no-install). Run \`${bareInstallCommand(pm)}\` before using .arsenal/${runFile}.`,
+    );
+  } else {
+    try {
+      runInstall(pm);
+    } catch {
+      installFailed = true;
+      console.error(
+        `\n${bareInstallCommand(pm)} failed — run it yourself once you've sorted out why.`,
+      );
+    }
+  }
+
   console.log("\nNext steps:");
-  if (dep.changed) {
-    console.log(`  1. ${pm} install`);
-  } else if (dep.reason === "no package.json in this directory") {
-    console.log(`  1. ${installCommand(pm, gitDependencySpec())}`);
+  let step = 1;
+  if (installFailed) {
+    console.log(`  ${step++}. ${bareInstallCommand(pm)}`);
   }
   if (!process.env.BOB_API_KEY) {
     console.log(
-      "  2. export BOB_API_KEY=xxx   (required by the bob CLI — get one at bob.ibm.com)",
+      `  ${step++}. export BOB_API_KEY=xxx   (required by the bob CLI — get one at bob.ibm.com)`,
     );
   }
   console.log(
-    `  3. Edit .arsenal/prompt.md, then run: ${usesTs ? "npx tsx" : "node"} .arsenal/${runFile}`,
+    `  ${step++}. Edit .arsenal/prompt.md, then run: ${usesTs ? "npx tsx" : "node"} .arsenal/${runFile}`,
   );
 }
 
 function printUsage() {
-  console.log("Usage: arsenal init [--force]");
+  console.log("Usage: arsenal init [--force] [--no-install]");
 }
 
 function main() {
@@ -183,7 +213,7 @@ function main() {
     process.exit(1);
   }
 
-  runInit(rest.includes("--force"));
+  runInit(rest.includes("--force"), rest.includes("--no-install"));
 }
 
 main();
