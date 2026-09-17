@@ -205,14 +205,21 @@ export const withSandboxLifecycleImpl = <A>(
     const signal = options.signal ?? new AbortController().signal;
 
     // Without an explicit branch, record host's current branch so the temp
-    // branch can be merged back into it later.
-    const hostCurrentBranch: string | null = !branch
-      ? yield* gitClient.currentBranch(hostRepoDir)
-      : null;
+    // branch can be merged back into it later. Independent of the identity
+    // read below, so run both concurrently instead of as two sequential
+    // host `git` subprocess spawns.
+    const [hostCurrentBranch, identity] = yield* Effect.all(
+      [
+        branch
+          ? Effect.succeed<string | null>(null)
+          : gitClient.currentBranch(hostRepoDir),
+        gitClient.identity(hostRepoDir),
+      ],
+      { concurrency: "unbounded" },
+    );
 
     // Read host git identity before entering the sandbox
-    const { name: hostGitName, email: hostGitEmail } =
-      yield* gitClient.identity(hostRepoDir);
+    const { name: hostGitName, email: hostGitEmail } = identity;
 
     // For host-side operations, use hostWorktreePath (the real path on the host)
     // instead of sandboxRepoDir (which may be a sandbox path like /home/agent/workspace).

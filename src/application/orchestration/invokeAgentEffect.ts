@@ -17,10 +17,7 @@ import type {
   ParsedStreamEvent,
 } from "../../spi/AgentProvider.js";
 import type { AgentExecutor } from "../../ports/AgentExecutor.js";
-import {
-  matchCompletionSignal,
-  normalizeCompletionSignals,
-} from "./completionSignal.js";
+import { normalizeCompletionSignals } from "./completionSignal.js";
 import {
   AgentError,
   AgentIdleTimeoutError,
@@ -30,6 +27,7 @@ import {
   runAcpSession,
   type PersistentAcpSession,
 } from "../../application/acp/runAcpSession.js";
+import { BoundedTail } from "../../utils/boundedTail.js";
 
 const IDLE_WARNING_INTERVAL_MS = 60_000;
 const DEFAULT_IDLE_TIMEOUT_SECONDS = 10 * 60;
@@ -138,7 +136,10 @@ export const invokeAgentEffect = (
     let resultText = "";
     let sessionId: string | undefined;
     let usage: IterationUsage | undefined;
-    let accumulatedOutput = "";
+    // Bounded so completion-signal scanning stays cheap on long streams
+    // (thousands of small text deltas) instead of rescanning an
+    // ever-growing string on every event — see BoundedTail's docstring.
+    const accumulatedOutput = new BoundedTail();
 
     const timeoutSignal = yield* Deferred.make<never, AgentIdleTimeoutError>();
     const completionTimeoutDeferred = yield* Deferred.make<
@@ -192,7 +193,7 @@ export const invokeAgentEffect = (
               new Error("Completion grace period elapsed"),
             );
             yield* Deferred.succeed(completionTimeoutDeferred, {
-              result: resultText || accumulatedOutput,
+              result: resultText || accumulatedOutput.toString(),
               sessionId,
               usage,
               completionSignal: matchedSignal,
@@ -220,11 +221,11 @@ export const invokeAgentEffect = (
       switch (event.type) {
         case "text":
           onText(event.text);
-          if (event.assertive !== false) accumulatedOutput += event.text;
+          if (event.assertive !== false) accumulatedOutput.push(event.text);
           break;
         case "result":
           resultText = event.result;
-          accumulatedOutput += event.result;
+          accumulatedOutput.push(event.result);
           break;
         case "tool_call":
           onToolCall(event.name, event.args);
@@ -237,9 +238,12 @@ export const invokeAgentEffect = (
           break;
       }
       if (!completionDetected) {
-        const found = matchCompletionSignal(
-          accumulatedOutput,
-          completionSignals,
+        // completionSignals is already normalized (line 122), so scan
+        // directly instead of going through matchCompletionSignal, which
+        // would re-normalize (allocate + filter) on every single event.
+        const outputTail = accumulatedOutput.toString();
+        const found = completionSignals.find((sig) =>
+          outputTail.includes(sig),
         );
         if (found !== undefined) {
           completionDetected = true;
@@ -292,7 +296,7 @@ export const invokeAgentEffect = (
           );
         }
         return Effect.succeed({
-          result: resultText || accumulatedOutput,
+          result: resultText || accumulatedOutput.toString(),
           sessionId,
           usage,
           completionSignal: matchedSignal,

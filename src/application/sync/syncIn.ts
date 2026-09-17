@@ -96,14 +96,17 @@ export const syncIn = (
             new SyncError({ message: "Failed to clean up sandbox temp dir" }),
         });
 
-        // Verify sync succeeded
-        const hostHead = (yield* execHost(
-          "git rev-parse HEAD",
-          hostRepoDir,
-        )).trim();
-        const sandboxHead = (yield* execHandleOk(handle, "git rev-parse HEAD", {
-          cwd: worktreePath,
-        })).stdout.trim();
+        // Verify sync succeeded — the two reads are independent, so run
+        // them concurrently instead of as two sequential subprocess spawns.
+        const [hostHeadRaw, sandboxHeadResult] = yield* Effect.all(
+          [
+            execHost("git rev-parse HEAD", hostRepoDir),
+            execHandleOk(handle, "git rev-parse HEAD", { cwd: worktreePath }),
+          ],
+          { concurrency: "unbounded" },
+        );
+        const hostHead = hostHeadRaw.trim();
+        const sandboxHead = sandboxHeadResult.stdout.trim();
 
         if (hostHead !== sandboxHead) {
           yield* Effect.fail(

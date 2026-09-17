@@ -180,25 +180,40 @@ export const syncOut = (
   Effect.gen(function* () {
     const worktreePath = handle.worktreePath;
 
-    const hostHead = (yield* execHost(
-      "git rev-parse HEAD",
-      hostRepoDir,
-    )).trim();
-    const sandboxHead = (yield* execHandleOk(handle, "git rev-parse HEAD", {
-      cwd: worktreePath,
-    })).stdout.trim();
+    // These five reads are mutually independent (none needs another's
+    // result to build its own command) — run them concurrently instead of
+    // as five sequential subprocess round-trips, which on isolated
+    // providers happens on every sync-out (i.e. every iteration).
+    const [hostHeadRaw, sandboxHeadResult, baseRefResult, diffResult, lsFilesResult] =
+      yield* Effect.all(
+        [
+          execHost("git rev-parse HEAD", hostRepoDir),
+          execHandleOk(handle, "git rev-parse HEAD", { cwd: worktreePath }),
+          // Resolve the format-patch base from a sandbox-owned ref. `git am`
+          // rewrites host SHAs, so after run 1 the host HEAD is unknown to
+          // the sandbox; the ref pins the last commit we actually shipped.
+          // Absent on run 1 — and that is the only run where host HEAD is
+          // still a valid base (sync-in just copied it in). The two
+          // conditions are coupled: the ref's absence and host HEAD's
+          // validity both flip together, exactly once, after run 1.
+          execSandbox(
+            handle,
+            `git rev-parse --verify --quiet ${SYNC_BASE_REF}`,
+            { cwd: worktreePath },
+          ),
+          // Check for uncommitted changes
+          execSandbox(handle, "git diff HEAD", { cwd: worktreePath }),
+          // Check for untracked files
+          execSandbox(handle, "git ls-files --others --exclude-standard", {
+            cwd: worktreePath,
+          }),
+        ],
+        { concurrency: "unbounded" },
+      );
 
-    // Resolve the format-patch base from a sandbox-owned ref. `git am` rewrites
-    // host SHAs, so after run 1 the host HEAD is unknown to the sandbox; the
-    // ref pins the last commit we actually shipped. Absent on run 1 — and that
-    // is the only run where host HEAD is still a valid base (sync-in just
-    // copied it in). The two conditions are coupled: the ref's absence and
-    // host HEAD's validity both flip together, exactly once, after run 1.
-    const baseRefResult = yield* execSandbox(
-      handle,
-      `git rev-parse --verify --quiet ${SYNC_BASE_REF}`,
-      { cwd: worktreePath },
-    );
+    const hostHead = hostHeadRaw.trim();
+    const sandboxHead = sandboxHeadResult.stdout.trim();
+
     const base =
       baseRefResult.exitCode === 0 && baseRefResult.stdout.trim().length > 0
         ? baseRefResult.stdout.trim()
@@ -206,19 +221,9 @@ export const syncOut = (
 
     const hasCommits = base !== sandboxHead;
 
-    // Check for uncommitted changes
-    const diffResult = yield* execSandbox(handle, "git diff HEAD", {
-      cwd: worktreePath,
-    });
     const hasDiff =
       diffResult.exitCode === 0 && diffResult.stdout.trim().length > 0;
 
-    // Check for untracked files
-    const lsFilesResult = yield* execSandbox(
-      handle,
-      "git ls-files --others --exclude-standard",
-      { cwd: worktreePath },
-    );
     const hasUntracked =
       lsFilesResult.exitCode === 0 && lsFilesResult.stdout.trim().length > 0;
 

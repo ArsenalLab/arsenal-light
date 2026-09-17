@@ -21,6 +21,7 @@ export default defineConfig({
   clean: true,
   dts: true,
   treeshake: true,
+  minify: true,
   external: [],
   define: {
     __ARSENAL_VERSION__: JSON.stringify(pkg.version),

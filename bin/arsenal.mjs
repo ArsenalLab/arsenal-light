@@ -1,11 +1,24 @@
 #!/usr/bin/env node
 /**
- * `arsenal init` — scaffolds the minimum needed to run `run()` in any git
- * repo. No CI, no lint config, no agent/sandbox choice beyond the only
- * zero-config options Arsenal ships (`bob` + `noSandbox()`). Plain Node,
- * no dependencies — kept out of `src/` on purpose so it isn't subject to
- * the engine's layered-architecture rules (see scripts/check-architecture.mjs);
- * it scaffolds consuming projects, it doesn't participate in the engine.
+ * `arsenal init` — scaffolds the minimum needed to run the agent in any git
+ * repo, and `arsenal run` — runs it. No CI, no lint config, no agent/sandbox
+ * choice beyond the only zero-config options Arsenal ships (`bob` +
+ * `noSandbox()`). Plain Node, no dependencies — kept out of `src/` on
+ * purpose so it isn't subject to the engine's layered-architecture rules
+ * (see scripts/check-architecture.mjs); it scaffolds/drives consuming
+ * projects, it doesn't participate in the engine.
+ *
+ * Default `init` writes only `.arsenal/prompt.md` — no `package.json`, no
+ * `node_modules/`, nothing else in the project. `arsenal run` then imports
+ * this package's own bundled `dist/index.js` by absolute path (not by
+ * package-name resolution), so it works whether Arsenal is installed
+ * globally or locally: Node's module resolution for the library's own
+ * runtime deps (@clack/prompts, @agentclientprotocol/sdk) stays inside
+ * *this* package's directory and never has to touch the project at all.
+ *
+ * `arsenal init --lib` keeps the old behavior (package.json + devDependency
+ * + a generated run.mjs/run.ts you import the library from directly) for
+ * anyone who wants to hand-write custom sandbox/agent providers in code.
  */
 import { execSync } from "node:child_process";
 import {
@@ -16,7 +29,7 @@ import {
   appendFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const cwd = process.cwd();
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -68,7 +81,9 @@ function gitDependencySpec() {
     /github\.com[:/]([^/]+)\/([^/.]+?)(?:\.git)?$/,
   );
   if (!match) {
-    throw new Error("Could not derive a git dependency spec from repository.url");
+    throw new Error(
+      "Could not derive a git dependency spec from repository.url",
+    );
   }
   const [, owner, repo] = match;
   return `github:${owner}/${repo}`;
@@ -78,7 +93,12 @@ function ensurePackageJson() {
   const pkgPath = join(cwd, "package.json");
   if (existsSync(pkgPath)) return { created: false };
 
-  const name = cwd.split(/[\\/]/).pop()?.toLowerCase().replace(/[^a-z0-9_.-]/g, "-") || "arsenal-project";
+  const name =
+    cwd
+      .split(/[\\/]/)
+      .pop()
+      ?.toLowerCase()
+      .replace(/[^a-z0-9_.-]/g, "-") || "arsenal-project";
   const pkg = { name, version: "0.0.0", private: true };
   writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
   return { created: true };
@@ -133,7 +153,8 @@ function ensureGitignoreLines(lines) {
   );
 }
 
-function runInit(force, skipInstall) {
+/** Default `arsenal init`: `.arsenal/prompt.md` only — nothing else touches the project. */
+function runInitDefault(force) {
   if (!isGitRepo()) {
     console.error("arsenal init must be run inside a git repository.");
     process.exit(1);
@@ -141,7 +162,39 @@ function runInit(force, skipInstall) {
 
   const arsenalDir = join(cwd, ".arsenal");
   if (existsSync(arsenalDir) && !force) {
-    console.log(".arsenal/ already exists — nothing to do (use --force to overwrite).");
+    console.log(
+      ".arsenal/ already exists — nothing to do (use --force to overwrite).",
+    );
+    return;
+  }
+
+  mkdirSync(arsenalDir, { recursive: true });
+  writeFileSync(join(arsenalDir, "prompt.md"), PROMPT_TEMPLATE);
+  ensureGitignoreLines([".arsenal/logs/"]);
+
+  console.log("Created .arsenal/prompt.md");
+  console.log("\nNext steps:");
+  let step = 1;
+  if (!process.env.BOB_API_KEY) {
+    console.log(
+      `  ${step++}. export BOB_API_KEY=xxx   (required by the bob CLI — get one at bob.ibm.com)`,
+    );
+  }
+  console.log(`  ${step++}. Edit .arsenal/prompt.md, then run: arsenal run`);
+}
+
+/** `arsenal init --lib`: today's script-generating flow, for hand-rolled sandbox/agent providers. */
+function runInitLib(force, skipInstall) {
+  if (!isGitRepo()) {
+    console.error("arsenal init must be run inside a git repository.");
+    process.exit(1);
+  }
+
+  const arsenalDir = join(cwd, ".arsenal");
+  if (existsSync(arsenalDir) && !force) {
+    console.log(
+      ".arsenal/ already exists — nothing to do (use --force to overwrite).",
+    );
     return;
   }
 
@@ -158,7 +211,9 @@ function runInit(force, skipInstall) {
   const pm = detectPackageManager();
 
   ensureGitignoreLines(
-    pkgCreated.created ? [".arsenal/logs/", "node_modules/"] : [".arsenal/logs/"],
+    pkgCreated.created
+      ? [".arsenal/logs/", "node_modules/"]
+      : [".arsenal/logs/"],
   );
 
   console.log(`Created .arsenal/prompt.md and .arsenal/${runFile}`);
@@ -202,11 +257,110 @@ function runInit(force, skipInstall) {
   );
 }
 
-function printUsage() {
-  console.log("Usage: arsenal init [--force] [--no-install]");
+function runInit(rest) {
+  const force = rest.includes("--force");
+  if (rest.includes("--lib")) {
+    runInitLib(force, rest.includes("--no-install"));
+  } else {
+    runInitDefault(force);
+  }
 }
 
-function main() {
+/** Parses `--prompt-file <path>`, `--max-iterations <n>`, `--branch-strategy <head|merge-to-head|branch:<name>>`. */
+function parseRunArgs(rest) {
+  const opts = { promptFile: ".arsenal/prompt.md" };
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    switch (arg) {
+      case "--prompt-file":
+        opts.promptFile = rest[++i];
+        break;
+      case "--max-iterations": {
+        const value = Number(rest[++i]);
+        if (!Number.isFinite(value)) {
+          console.error("--max-iterations expects a number");
+          process.exit(1);
+        }
+        opts.maxIterations = value;
+        break;
+      }
+      case "--branch-strategy": {
+        const value = rest[++i];
+        if (value === "head" || value === "merge-to-head") {
+          opts.branchStrategy = { type: value };
+        } else if (value?.startsWith("branch:")) {
+          opts.branchStrategy = {
+            type: "branch",
+            branch: value.slice("branch:".length),
+          };
+        } else {
+          console.error(
+            "--branch-strategy expects head, merge-to-head, or branch:<name>",
+          );
+          process.exit(1);
+        }
+        break;
+      }
+      default:
+        console.error(`Unknown option for arsenal run: ${arg}`);
+        printUsage();
+        process.exit(1);
+    }
+  }
+  return opts;
+}
+
+/**
+ * `arsenal run` — imports this package's own bundled `dist/index.js` by
+ * absolute path so it never needs a project-level `node_modules`.
+ */
+async function runRun(rest) {
+  if (!isGitRepo()) {
+    console.error("arsenal run must be run inside a git repository.");
+    process.exit(1);
+  }
+
+  const opts = parseRunArgs(rest);
+
+  if (!existsSync(join(cwd, opts.promptFile))) {
+    console.error(
+      `Prompt file not found: ${opts.promptFile}\nRun \`arsenal init\` first, or pass --prompt-file.`,
+    );
+    process.exit(1);
+  }
+
+  const distEntry = join(packageRoot, "dist", "index.js");
+  const { run, bob, noSandbox } = await import(pathToFileURL(distEntry).href);
+
+  try {
+    await run({
+      agent: bob("default"),
+      sandbox: noSandbox(),
+      promptFile: opts.promptFile,
+      ...(opts.maxIterations !== undefined
+        ? { maxIterations: opts.maxIterations }
+        : {}),
+      ...(opts.branchStrategy !== undefined
+        ? { branchStrategy: opts.branchStrategy }
+        : {}),
+    });
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+}
+
+function printUsage() {
+  console.log(
+    [
+      "Usage:",
+      "  arsenal init [--force] [--lib [--no-install]]",
+      "  arsenal run [--prompt-file <path>] [--max-iterations <n>] [--branch-strategy <head|merge-to-head|branch:<name>>]",
+    ].join("\n"),
+  );
+}
+
+async function main() {
   const [, , cmd, ...rest] = process.argv;
 
   if (cmd === "--help" || cmd === "-h" || cmd === undefined) {
@@ -214,13 +368,19 @@ function main() {
     process.exit(cmd === undefined ? 1 : 0);
   }
 
-  if (cmd !== "init") {
-    console.error(`Unknown command: ${cmd}`);
-    printUsage();
-    process.exit(1);
+  if (cmd === "init") {
+    runInit(rest);
+    return;
   }
 
-  runInit(rest.includes("--force"), rest.includes("--no-install"));
+  if (cmd === "run") {
+    await runRun(rest);
+    return;
+  }
+
+  console.error(`Unknown command: ${cmd}`);
+  printUsage();
+  process.exit(1);
 }
 
-main();
+await main();

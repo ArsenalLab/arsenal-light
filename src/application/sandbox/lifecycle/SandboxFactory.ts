@@ -223,6 +223,16 @@ export interface AcquireSandboxOptions {
   readonly hooks?: SandboxHooks;
   readonly signal?: AbortSignal;
   readonly timeouts?: Timeouts;
+  /**
+   * Skip the best-effort stale-worktree prune (default `false`). Set by
+   * `withSandbox` on every call after its first within the same run — the
+   * worktree set under `.arsenal/worktrees/` doesn't meaningfully change
+   * between iterations of one `orchestrate()` call, so re-pruning (2 `git`
+   * subprocess spawns + a directory scan) on every iteration is redundant
+   * work. Direct `acquireSandbox` callers (`createSandbox()`,
+   * `createWorktree()`) leave this unset and still prune on every call.
+   */
+  readonly skipPrune?: boolean;
 }
 
 export interface AcquiredSandbox {
@@ -412,6 +422,7 @@ export const acquireSandbox = (
       hooks,
       signal,
       timeouts,
+      skipPrune,
     } = options;
 
     const isHeadMode = branchStrategy.type === "head";
@@ -459,23 +470,27 @@ export const acquireSandbox = (
       return { sandboxInfo, sandbox, handle, worktreeInfo: undefined };
     }
 
-    /** Prune stale worktrees (best-effort), then create a fresh one. */
-    const pruneAndCreate = () =>
-      WorktreeManager.pruneStale(hostRepoDir).pipe(
-        Effect.catchAll((e) =>
-          Effect.flatMap(Display, (display) =>
-            display.alert(
-              `[arsenal] Warning: failed to prune stale worktrees: ${e.message}`,
+    /** Prune stale worktrees (best-effort, unless `skipPrune`), then create a fresh one. */
+    const pruneAndCreate = () => {
+      const create = branch
+        ? WorktreeManager.create(hostRepoDir, { branch, baseBranch })
+        : WorktreeManager.create(hostRepoDir, { name });
+      const prune = skipPrune
+        ? Effect.void
+        : WorktreeManager.pruneStale(hostRepoDir).pipe(
+            Effect.catchAll((e) =>
+              Effect.flatMap(Display, (display) =>
+                display.alert(
+                  `[arsenal] Warning: failed to prune stale worktrees: ${e.message}`,
+                ),
+              ),
             ),
-          ),
-        ),
-        Effect.andThen(
-          branch
-            ? WorktreeManager.create(hostRepoDir, { branch, baseBranch })
-            : WorktreeManager.create(hostRepoDir, { name }),
-        ),
+          );
+      return prune.pipe(
+        Effect.andThen(create),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
       );
+    };
 
     // Create/reuse a worktree, then start a sandbox against it. If startup
     // fails, the worktree is cleaned up (preserved-if-dirty, with the same
@@ -583,6 +598,14 @@ export const WorktreeDockerSandboxFactory = {
           Effect.provideService(HostProcess, host),
         );
 
+      // Tracks whether this factory has already pruned stale worktrees once.
+      // `withSandbox` is called once per iteration in a multi-iteration
+      // orchestrate() run, all sharing this same factory instance/layer —
+      // pruning is best-effort cleanup of *other* stale worktrees, so
+      // re-running it on every iteration of the same run just repeats work
+      // against a worktree set that hasn't meaningfully changed.
+      let prunedOnce = false;
+
       return {
         withSandbox: <A, E, R>(
           makeEffect: (
@@ -591,8 +614,10 @@ export const WorktreeDockerSandboxFactory = {
           ) => Effect.Effect<A, E, R>,
         ): Effect.Effect<WithSandboxResult<A>, E | SandboxError, R> => {
           let preservedPath: string | undefined;
+          const skipPrune = prunedOnce;
+          prunedOnce = true;
           return Effect.acquireUseRelease(
-            provideAcquireDeps(acquireSandbox(config)),
+            provideAcquireDeps(acquireSandbox({ ...config, skipPrune })),
             (acquired) =>
               makeEffect(
                 acquired.sandboxInfo,
