@@ -110,8 +110,8 @@ npm install --save-dev github:ArsenalLab/arsenal-light
 
 > **Not yet published to npm.** `npm install @arsenallab/arsenal-light` (no
 > `github:` prefix) will 404 until it is. The `github:` spec above installs
-> straight from this repo's default branch — `dist/` is committed, so no
-> build runs at install time.
+> straight from this repo's default branch and builds it locally via the
+> `prepare` script.
 >
 > Working from a local clone instead (e.g. testing changes before they land
 > on the default branch)? Build and pack it:
@@ -147,10 +147,5 @@ npm test               # unit tests (vitest)
 npm run typecheck
 npm run format
 ```
-
-`dist/` is committed (sourcemaps excluded) so consumers installing straight
-from git never need to build. If you change anything under `src/`, run
-`npm run build` and commit the resulting `dist/` changes in the same PR —
-nothing currently checks for this automatically.
 
 ## License
