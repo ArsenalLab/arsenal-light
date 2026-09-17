@@ -8,6 +8,9 @@
   "bin": {
     "arsenal": "./bin/arsenal.mjs"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "exports": {
     ".": {
       "import": "./dist/index.js",
