@@ -7,6 +7,7 @@ describe("bob provider", () => {
     expect(provider.buildAcpArgs()).toEqual([
       "bob",
       "acp",
+      "--auto-approve",
       "--trust",
       "--accept-license",
     ]);

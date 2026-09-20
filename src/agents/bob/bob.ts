@@ -86,6 +86,7 @@ const assertAcpSupported = (
 export const bob = (model: string, options?: BobOptions): AgentProvider => {
   const resolvedModel = options?.model ?? model;
   assertAcpSupported(resolvedModel, options);
+  const autoApprove = options?.autoApprove ?? true;
   const trust = options?.trust ?? true;
   const acceptLicense = options?.acceptLicense ?? true;
 
@@ -116,7 +117,7 @@ export const bob = (model: string, options?: BobOptions): AgentProvider => {
       toolCallNames.clear();
 
       const args = [options?.bobPath ?? "bob", "acp"];
-      if (options?.autoApprove) {
+      if (autoApprove) {
         args.push("--auto-approve");
       }
       if (options?.disableMcp) {

@@ -10,7 +10,7 @@ Arsenal is a TypeScript library (`@arsenallab/arsenal-light`) for running an AI 
 import { run, bob, noSandbox } from "@arsenallab/arsenal-light";
 
 await run({
-  agent: bob("default"),
+  agent: bob("default", { autoApprove: true }),
   sandbox: noSandbox(),
   promptFile: ".arsenal/prompt.md",
 });
